@@ -1,161 +1,87 @@
-<div align="center">
+# DSAA3073 StockBench Starter
 
-# An LLM-Powered Stock Trading Benchmark Platform
+Build a trading method with traditional models, an LLM, or your own agent.
+All methods use the same simulation engine and performance measures.
+The released StockBench data is included, together with a simple baseline
+that runs without training, an API key, or a model download.
 
-> **DSAA3073 course adaptation:** Start with [STUDENT_QUICKSTART.md](STUDENT_QUICKSTART.md)
-> for the offline, no-API baseline and the shared interface for traditional
-> methods, LLMs and custom agents. The original project documentation follows.
-<p align="center">
-  <a href="https://stockbench.github.io/">Website</a> •
-  <a href="https://arxiv.org/abs/2510.02209">Paper</a> •
-  <a href="https://github.com/ChenYXxxx/stockbench">Github</a> 
-</p>
+[Project website](https://lixin2002cn.github.io/3073-Project/) ·
+[Student quick start](STUDENT_QUICKSTART.md) ·
+[Requirements & rubric](https://lixin2002cn.github.io/3073-Project/requirements.html) ·
+[Download code & data](https://github.com/lixin2002cn/3073-StockBench/archive/refs/heads/main.zip)
 
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
-[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+## Start here
 
----
+Download and extract the ZIP, or clone this repository. Use Python 3.10 or
+newer. Open a terminal in the folder containing `configs/` and `stockbench/`.
 
-<img src="main.png" alt="StockBench Main" width="800"/>
+Windows PowerShell:
 
-</div>
-
-## 🎯 Overview
-
-**StockBench** is a comprehensive benchmark platform designed to evaluate Large Language Models (LLMs) in stock trading decision-making. It simulates real-world trading scenarios using historical market data to assess investment decision quality, risk management capabilities, and return performance across different LLM models.
-
-### ✨ Key Features
-
-- 🌍 **Realistic Market Interaction** - Curated stocks with high-quality price, fundamental data, and timely news from Polygon & Finnhub
-- 🔄 **Continuous Decision Making** - Multi-step workflow (portfolio → analysis → trade) reflecting real investor behavior
-- 🔒 **Data Contamination Free** - Recent market data (post-2024) with zero overlap with LLM training corpora
-### 📊 Investment Targets
-
-<div align="center">
-<img src="dataset.png" alt="StockBench Dataset" width="800"/>
-<p><i>StockBench Dataset Structure and Features</i></p>
-</div>
-We select the top 20 stocks from the Dow Jones Industrial Average (DJIA) by weight as our investment targets, ensuring diverse representation across major sectors while avoiding short-term irrational market sentiment.
----
-
-## 🚀 Quick Start
-
-### Installation
-
-```bash
-# Clone the repository
-git clone <repository-url>
-cd stockbench
-
-# Create environment
-conda create -n stockbench python=3.11
-conda activate stockbench
-
-# Install dependencies
-pip install -r requirements.txt
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python -m pip install -r requirements-offline.txt
+.\.venv\Scripts\python -m stockbench.apps.run_backtest --run-id my-first-run
 ```
 
-### Configuration
+macOS or Linux:
 
-Set up your API keys:（If you need to test other months or stocks, please set it up）
-
-```bash
-export POLYGON_API_KEY="your_polygon_api_key"
-export FINNHUB_API_KEY="your_finnhub_api_key"
-export OPENAI_API_KEY="your_openai_api_key"
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements-offline.txt
+.venv/bin/python -m stockbench.apps.run_backtest --run-id my-first-run
 ```
 
-> 💡 **Tip**: Free tiers available at [Polygon.io](https://polygon.io/) and [Finnhub.io](https://finnhub.io/)
+Package installation needs internet access. After installation, this baseline
+runs entirely offline. It buys equal dollar amounts of 20 stocks, leaves a
+small cash reserve for costs, and holds them. The default period is March–June
+2025, with 83 cached daily observations and $100,000 of starting cash.
 
-### Run Backtest
+Results go into `storage/reports/backtest/<run-id>/`. Open `equity.png`,
+`metrics.json`, and `trades.csv` to see the account value, summary measures,
+and executed trades. [Sample outputs](sample_outputs/equal_weight/) are
+included.
 
-Edit `scripts/run_benchmark.sh` to configure your backtest:
+## Bring your own method
 
-```bash
-START_DATE="${START_DATE:-2025-03-01}"
-END_DATE="${END_DATE:-2025-06-30}"
-LLM_PROFILE="${LLM_PROFILE:-openai}"
-```
+| Method | Entry point |
+| --- | --- |
+| Offline baseline | [configs/offline_baseline.yaml](configs/offline_baseline.yaml) |
+| Traditional or custom method | [examples/my_strategy.py](examples/my_strategy.py) |
+| LLM or agent | [configs/llm_example.yaml](configs/llm_example.yaml) |
+| Shared strategy interface | [Student quick start, section 2](STUDENT_QUICKSTART.md#2-add-your-own-method) |
 
-Then run:
+A strategy implements `Strategy(cfg)` and `on_bar(ctx)`. It can return buy
+and sell quantities, or use the helper that converts portfolio weights into
+orders. The LLM route is optional and can use a local model server or a
+compatible API. See the quick start for installation and configuration.
 
-```bash
-bash scripts/run_benchmark.sh
-```
+## What is included?
 
-Or use command-line arguments:
+- Released local price, news, company-data, indicator, and corporate-action
+  caches from StockBench.
+- A common runner and trading engine, with trading costs, cash and holdings
+  accounting, and saved results.
+- An offline baseline, a custom strategy example, and the original LLM adapter.
+- [Verification notes](VERIFICATION.md), tests, and scripts that check offline
+  execution and account totals.
 
-```bash
-bash scripts/run_benchmark.sh \
-    --start-date 2025-04-01 \
-    --end-date 2025-05-31 \
-    --llm-profile deepseek-v3.1
-```
+Historical data can be present in a model's training data. This starter does
+not claim to remove that risk. Its simulation rules and information timing
+are described in the quick start. **Profit and loss amounts do not affect
+the project grade.**
 
----
+## Source and license
 
-## 📊 Results
+This is the DSAA3073 course adaptation of
+[ChenYXxxx/stockbench](https://github.com/ChenYXxxx/stockbench), based on commit
+`ce8b2b3483590646ad3b650ac8221f43f76fd091`.
+The upstream [Apache-2.0 license](LICENSE) and source attribution are retained.
+Cached data keeps its original provider attribution and applicable terms.
 
-Backtest results are automatically saved in `storage/reports/backtest/` with comprehensive metrics:
+The course adaptation adds a shared strategy interface and offline defaults,
+and fixes several execution and output issues. Its results are not an exact
+reproduction of the paper's leaderboard.
 
-**Performance Metrics**
-- Total Return
-- Sortino Ratio
-- Maximum Drawdown
-
----
-
-
-
-### Custom Strategies
-
-Extend the platform with your own trading strategies by implementing custom agents.
-
----
-
-## 📚 Project Structure
-
-```
-stockbench/
-├── stockbench/         # Core package
-│   ├── agents/        # Trading agents
-│   ├── backtest/      # Backtesting engine
-│   ├── adapters/      # Data adapters
-│   └── apps/          # Applications
-├── scripts/           # Run scripts
-├── storage/           # Data storage & reports
-└── config.yaml        # Configuration file
-```
-
----
-
-
-## 📄 License
-
-This project is licensed under the Apache 2.0 License - see the [LICENSE](LICENSE) file for details.
-
----
-
-## 🙏 Acknowledgments
-
-- [Polygon.io](https://polygon.io/) - High-quality stock market data
-- [Finnhub](https://finnhub.io/) - Financial news and market data
-- [OpenAI](https://openai.com/) - Powerful LLM capabilities
-- All contributors to this project
-
----
-
-## 📧 Contact
-
-- 🐛 Issues: [GitHub Issues](../../issues)
-
----
-
-<div align="center">
-
-**⭐ If this project helps you, please give us a Star!**
-
-Made with ❤️ by StockBench Team
-
-</div>
+[Original documentation](UPSTREAM_README.md) ·
+[StockBench research website](https://stockbench.github.io/) ·
+[Paper](https://arxiv.org/abs/2510.02209)
