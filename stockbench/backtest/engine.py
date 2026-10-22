@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple
 import json
+import math
 from datetime import datetime, timezone
 
 import pandas as pd
@@ -551,7 +552,7 @@ class BacktestEngine:
 				if open_price is None:
 					open_price = pos.avg_price
 				position_value = pos.shares * open_price
-				unrealized_pnl += pos.shares * (open_price - pos.avg_price)
+				unrealized_pnl += pos.shares * open_price - pos.total_cost
 				
 				# Use complete price data when calculating position percentage
 				# If open_prices is empty, use previous_open_prices as fallback
@@ -564,7 +565,7 @@ class BacktestEngine:
 					"mark_price": open_price,  # This is actually the opening price, keep field name compatibility
 					"position_value": position_value,
 					"position_pct": position_pct,
-					"unrealized_pnl": pos.shares * (open_price - pos.avg_price),
+					"unrealized_pnl": pos.shares * open_price - pos.total_cost,
 					"holding_days": pos.holding_days,
 					"total_cost": pos.total_cost  # Add cumulative cost information
 				}
@@ -633,14 +634,14 @@ class BacktestEngine:
 
 	def _create_trade_record(self, symbol: str, qty: float, exec_price: float, exec_ref_price: float,
 							filled_qty: float, net_cost: float, pf: Portfolio, open_prices: Dict[str, float],
-							ts: pd.Timestamp) -> TradeRecord:
+							ts: pd.Timestamp, previous_position: Position | None = None) -> TradeRecord:
 		"""Create a detailed trade record"""
 		pos = pf.positions.get(symbol)
 		
 		# Pre-trade state
 		cash_before = pf.cash + net_cost  # Restore pre-trade cash
-		position_before = pos.shares - filled_qty if pos else -filled_qty
-		avg_price_before = pos.avg_price if pos and pos.shares != filled_qty else 0.0
+		position_before = previous_position.shares if previous_position else (pos.shares - filled_qty if pos else -filled_qty)
+		avg_price_before = previous_position.avg_price if previous_position else (pos.avg_price if pos and pos.shares != filled_qty else 0.0)
 		
 		# Compute pre-trade portfolio state
 		temp_pf = Portfolio(cash=cash_before, positions=pf.positions.copy())
@@ -648,7 +649,8 @@ class BacktestEngine:
 			temp_pf.positions[symbol] = Position(
 				shares=position_before,
 				avg_price=avg_price_before,
-				holding_days=pos.holding_days if pos else 0
+				holding_days=previous_position.holding_days if previous_position else 0,
+				total_cost=previous_position.total_cost if previous_position else 0.0
 			)
 		
 		# Temporarily use None for previous_open_prices because this is mainly a trade record
@@ -661,7 +663,7 @@ class BacktestEngine:
 			if pos_temp.shares != 0:
 				# Price fallback priority: opening price -> cost price (use opening price for valuation)
 				mark_price = open_prices.get(sym, pos_temp.avg_price)
-				unrealized_pnl_before += pos_temp.shares * (mark_price - pos_temp.avg_price)
+				unrealized_pnl_before += pos_temp.shares * mark_price - pos_temp.total_cost
 		
 		# Post-trade state
 		cash_after = pf.cash
@@ -677,16 +679,19 @@ class BacktestEngine:
 			if pos_temp.shares != 0:
 				# Price fallback priority: opening price -> cost price (use opening price for valuation)
 				mark_price = open_prices.get(sym, pos_temp.avg_price)
-				unrealized_pnl_after += pos_temp.shares * (mark_price - pos_temp.avg_price)
+				unrealized_pnl_after += pos_temp.shares * mark_price - pos_temp.total_cost
 		
 		# Compute realized P&L (when selling)
 		realized_pnl = 0.0
 		if filled_qty < 0 and position_before > 0:  # Sell
-			realized_pnl = filled_qty * (exec_price - avg_price_before)
+			if previous_position is not None:
+				realized_pnl = -net_cost - previous_position.total_cost * (-filled_qty / position_before)
+			else:
+				realized_pnl = -filled_qty * (exec_price - avg_price_before)
 		
 		# Compute trade amount and commission
-		# Note: use opening price (exec_ref_price) for trade amount, not execution price (exec_price)
-		trade_value = abs(filled_qty * exec_ref_price)
+		# Use the same execution price for account cash and trade reports.
+		trade_value = abs(filled_qty * exec_price)
 		commission = self._apply_commission(trade_value)
 		
 		return TradeRecord(
@@ -695,10 +700,10 @@ class BacktestEngine:
 			side="buy" if filled_qty > 0 else "sell",
 			qty=abs(filled_qty),
 			exec_price=exec_price,  # Execution price (with slippage, used for average position price)
-			exec_ref_price=exec_ref_price,  # Opening price (used for cash update)
+			exec_ref_price=exec_ref_price,  # Opening reference before slippage
 			commission_bps=self.commission_bps,
 			fill_ratio=self.fill_ratio,
-			trade_value=trade_value,  # Trade amount calculated using opening price
+			trade_value=trade_value,  # Fee charged on execution notional
 			commission=commission,
 			net_cost=net_cost,
 			cash_before=cash_before,
@@ -770,41 +775,15 @@ class BacktestEngine:
 		return notional * (self.commission_bps / 10_000.0)
 
 	def _fill_at_open(self, symbol: str, trade_date: pd.Timestamp, qty: float, open_price: float) -> Tuple[float, float, float]:
-		# Match at open price, considering slippage, commission and fill ratio
-		logger.info(f"=== Cash flow calculation started [{symbol}] ===")
-		logger.info(f"[CASH_FLOW] Initial params: symbol={symbol}, qty={qty}, open_price={open_price:.4f}")
-		
-		side = 1 if qty > 0 else -1
-		logger.info(f"[CASH_FLOW] Trade side: {'BUY' if side > 0 else 'SELL'} (side={side})")
-		
-		# Compute slippage price for updating average position price
-		px = self.slippage.apply_buy(open_price) if side > 0 else self.slippage.apply_sell(open_price)
-		logger.debug(f"[CASH_FLOW] Price after slippage: {px:.4f} (original: {open_price:.4f})")
-		
-		planned_qty = abs(qty)
-		filled_qty = round(planned_qty * max(0.0, min(1.0, self.fill_ratio)), 2)  # keep two decimals
-		filled_qty = filled_qty * side
-		logger.debug(f"[SHARES_CALCULATION] {symbol}: using open {open_price:.4f} (date: {trade_date})")
-		logger.debug(f"[SHARES_CALCULATION] {symbol}: planned_shares={planned_qty}, fill_ratio={self.fill_ratio}, filled_shares={filled_qty:.2f}")
-		
-		# Use raw opening price to compute gross notional and net cost
-		gross_open = open_price * abs(filled_qty)
-		logger.debug(f"[CASH_FLOW] Gross notional (using open): {open_price:.4f} × {abs(filled_qty):.2f} = {gross_open:.2f}")
-		
-		commission = self._apply_commission(gross_open)
-		logger.debug(f"[CASH_FLOW] Commission: {gross_open:.2f} × {self.commission_bps/10000:.4f} = {commission:.2f}")
-		
-		net_cost = gross_open + commission if side > 0 else -(gross_open - commission)
-		logger.debug(f"[CASH_FLOW] Net cost calc: {'BUY' if side > 0 else 'SELL'}")
-		if side > 0:
-			logger.debug(f"[CASH_FLOW]   Buy net cost = gross + commission = {gross_open:.2f} + {commission:.2f} = {net_cost:.2f}")
-		else:
-			logger.debug(f"[CASH_FLOW]   Sell net proceeds = -(gross - commission) = -({gross_open:.2f} - {commission:.2f}) = {net_cost:.2f}")
-		
-		logger.info(f"[CASH_FLOW] Final: filled_qty={filled_qty:.2f}, exec_px={px:.4f} (for average cost), open_price={open_price:.4f} (for cash), net_cost={net_cost:.2f}")
-		logger.info(f"=== Cash flow calculation ended [{symbol}] ===")
-		
-		return filled_qty, px, net_cost
+		"""Return signed filled shares, execution price and signed cash cost."""
+		if not math.isfinite(qty) or not math.isfinite(open_price) or open_price <= 0:
+			raise ValueError("Quantity and price must be finite; price must be positive.")
+		filled_qty = round(qty * max(0.0, min(1.0, self.fill_ratio)), 2)
+		px = self.slippage.apply_buy(open_price) if qty > 0 else self.slippage.apply_sell(open_price)
+		notional = abs(filled_qty) * px
+		commission = self._apply_commission(notional)
+		cost = notional + commission if qty > 0 else -(notional - commission)
+		return filled_qty, px, cost
 
 	def _apply_corporate_actions(self, pf: Portfolio, symbol: str, date: pd.Timestamp) -> None:
 		# Handle splits and dividends:
@@ -904,15 +883,18 @@ class BacktestEngine:
 			pass
 
 	def _enforce_max_positions(self, pf: Portfolio, orders: List[Dict]) -> List[Dict]:
-		if self.max_positions >= 999999:
-			return orders
-		long_symbols = {s for s, p in pf.positions.items() if p.shares > 0}
-		buy_orders = [o for o in orders if o.get("qty", 0) > 0]
-		sell_orders = [o for o in orders if o.get("qty", 0) <= 0]
-		remain_slots = max(0, self.max_positions - len(long_symbols))
-		buy_orders = buy_orders[:remain_slots]
-		filtered = buy_orders + sell_orders
-		return filtered
+		held = {s for s, p in pf.positions.items() if p.shares > 0}
+		sells = [o for o in orders if o["qty"] < 0]
+		for order in sells:
+			if order["qty"] <= -pf.positions.get(order["symbol"], Position()).shares:
+				held.discard(order["symbol"])
+		accepted = list(sells)
+		for order in (o for o in orders if o["qty"] > 0):
+			symbol = order["symbol"]
+			if symbol in held or len(held) < self.max_positions:
+				accepted.append(order)
+				held.add(symbol)
+		return accepted
 
 	def run(self, strategy, start: str, end: str, symbols: List[str], timespan: str = "day", run_id: str = None) -> Dict:
 		"""
@@ -934,7 +916,8 @@ class BacktestEngine:
 		
 
 		
-		dates = pd.date_range(start=start, end=end, freq="B")
+		dates = (self.datasets.trading_dates(symbols, start, end)
+				 if hasattr(self.datasets, "trading_dates") else pd.date_range(start=start, end=end, freq="B"))
 		nav = []
 		trade_rows = []
 		# Create portfolio, prioritize using portfolio.total_cash
@@ -958,7 +941,10 @@ class BacktestEngine:
 
 		for i, d in enumerate(dates):
 			# Check if it's a trading day; if not, skip processing and recording
-			from stockbench.core.data_hub import is_trading_day
+			if not hasattr(self.datasets, "trading_dates"):
+				from stockbench.core.data_hub import is_trading_day
+			else:
+				is_trading_day = lambda day: True
 			if not is_trading_day(d):
 				logger.info(f"\n[SKIP_NON_TRADING_DAY] {d.strftime('%Y-%m-%d')} skip non-trading day")
 				continue
@@ -979,8 +965,8 @@ class BacktestEngine:
 				# Use latest snapshot prices as historical fallback
 				last_snapshot = portfolio_snapshots[-1]
 				for symbol, symbol_info in last_snapshot.positions.items():
-					if hasattr(symbol_info, 'mark_price') and symbol_info.mark_price:
-						previous_open_map[symbol] = symbol_info.mark_price
+					if symbol_info.get("mark_price"):
+						previous_open_map[symbol] = symbol_info["mark_price"]
 				logger.info(f"[DEBUG] {d.strftime('%Y-%m-%d')} build previous_open_map: {len(previous_open_map)} symbols")
 				if previous_open_map:
 					for symbol, price in previous_open_map.items():
@@ -1090,6 +1076,10 @@ class BacktestEngine:
 				"cfg": self.cfg,
 			}
 
+			if hasattr(self.datasets, "history"):
+				history_days = int(self.cfg.get("backtest", {}).get("history_days", 30))
+				ctx["history"] = {s: self.datasets.history(s, d, history_days) for s in symbols}
+
 			# Implement order retry mechanism  
 			# Get retry configuration from config (same as dual_agent_llm.py)
 			retry_cfg = self.cfg.get("agents", {}).get("retry", {}) if self.cfg else {}
@@ -1111,89 +1101,37 @@ class BacktestEngine:
 				orders = strategy.on_bar(ctx)
 				if not isinstance(orders, list):
 					orders = []
+				seen = set()
+				for order in orders:
+					symbol = order.get("symbol")
+					qty = float(order.get("qty", 0))
+					if symbol not in symbols or symbol in seen or not math.isfinite(qty):
+						raise ValueError("Orders need a valid symbol, finite qty and at most one order per symbol.")
+					seen.add(symbol)
+					order["qty"] = round(qty, 2)
+					if qty < -pf.positions.get(symbol, Position()).shares - 1e-9:
+						raise ValueError(f"Cannot sell more shares than held: {symbol}")
 				orders = self._enforce_max_positions(pf, orders)
 				
 				# Track successfully executed trades for delayed decision recording
 				executed_symbols = []
 
-				# Daily mode: match orders at opening price
-				# Daily processing:
-				# Pre-check orders for possible rejection; if rejected, unified retry mechanism will handle
 				current_rejected_orders = []
 				acceptable_orders = []
-				
-				# Pre-calculate total cash requirement to provide better context for rejections
-				total_cash_required = 0
-				order_costs = {}  # Cache to avoid recalculating
-				
-				for od in orders:
-					sym = od.get("symbol")
-					qty = round(float(od.get("qty", 0)), 2) if od.get("qty") else 0
-					if sym and qty != 0 and open_map.get(sym) is not None:
-						try:
-							filled, exec_px, net_cost = self._fill_at_open(sym, d, qty, float(open_map.get(sym)))
-							order_costs[sym] = (filled, exec_px, net_cost)
-							if filled > 0 and net_cost > 0:  # Only count buying orders
-								total_cash_required += net_cost
-						except Exception as e:
-							logger.warning(f"[PRECALC] {sym} cost calculation failed: {e}")
-							continue
-				
-				logger.info(f"[PRECALC] Total cash required for all orders: {total_cash_required:.2f}, available: {pf.cash:.2f}")
-				
-				for od in orders:
-					try:
-						sym = od.get("symbol")
-						qty = round(float(od.get("qty", 0)), 2)
-						if not sym or qty == 0:
-							continue
-						ref_px_i = open_map.get(sym)
-						if ref_px_i is None:
-							continue
-						
-						# Use pre-calculated costs if available, otherwise calculate now
-						if sym in order_costs:
-							filled, exec_px, net_cost = order_costs[sym]
-						else:
-							filled, exec_px, net_cost = self._fill_at_open(sym, d, qty, float(ref_px_i))
-						
-						# Cash sufficiency check
-						if filled > 0 and net_cost > 0:  # only check buy trades
-							# Debug detailed cash comparison
-							logger.info(f"[DAY_PRECHECK_DEBUG] {sym}: pf.cash={pf.cash} (type: {type(pf.cash)}), net_cost={net_cost} (type: {type(net_cost)})")
-							logger.info(f"[DAY_PRECHECK_DEBUG] {sym}: pf.cash < net_cost = {pf.cash < net_cost}")
-							logger.info(f"[DAY_PRECHECK_DEBUG] {sym}: pf.cash >= net_cost = {pf.cash >= net_cost}")
-							
-							if pf.cash < net_cost:
-								current_rejected_orders.append({
-									"symbol": sym,
-									"qty": qty,
-									"reason": "insufficient_cash",  # Match the expected format in dual_agent_llm.py
-									"rejection_reason": "insufficient_cash",
-									"context": {
-										"required_cash_this_order": net_cost,
-										"available_cash": pf.cash,
-										"total_cash_required_all_orders": total_cash_required,
-										"cash_shortfall": total_cash_required - pf.cash,
-										"retry_attempt": retry_attempt,
-										"all_orders_count": len(orders),
-										"portfolio_rebalance_needed": True,
-										"suggestion": f"Total portfolio cash requirement ({total_cash_required:.2f}) exceeds available cash ({pf.cash:.2f}) by {total_cash_required - pf.cash:.2f}. Please reduce all order sizes proportionally or select fewer positions to fit within budget."
-									},
-									"retry_count": retry_attempt
-								})
-								logger.info(f"[DAY_PRECHECK] {sym} precheck rejected: insufficient cash {pf.cash:.2f} < required {net_cost:.2f}")
-								logger.info(f"[DAY_PRECHECK] Total cash shortfall: {total_cash_required - pf.cash:.2f}")
-								continue
-							else:
-								logger.info(f"[DAY_PRECHECK] {sym} precheck passed: sufficient cash {pf.cash:.2f} >= required {net_cost:.2f}")
-						
-						acceptable_orders.append(od)
-						
-					except Exception as e:
-						logger.warning(f"[DAY_PRECHECK] {sym if 'sym' in locals() else 'UNKNOWN'} precheck exception: {e}")
+				available_cash = pf.cash
+				for order in orders:
+					symbol, qty = order["symbol"], order["qty"]
+					if not qty or symbol not in open_map:
 						continue
-				
+					filled, px, cost = self._fill_at_open(symbol, d, qty, open_map[symbol])
+					if cost > available_cash + 1e-9:
+						current_rejected_orders.append({"symbol": symbol, "qty": qty,
+							"reason": "insufficient_cash", "rejection_reason": "insufficient_cash",
+							"context": {"available_cash": available_cash, "required_cash_this_order": cost}})
+					else:
+						available_cash -= cost
+						acceptable_orders.append(order)
+
 				# Check if we should retry or proceed with execution
 				if current_rejected_orders:
 					rejected_orders = current_rejected_orders
@@ -1241,6 +1179,7 @@ class BacktestEngine:
 								continue
 						
 					pos = self._ensure_position(pf, sym)
+					before_position = Position(**vars(pos))
 					
 					logger.info(f"[DAY_TRADE] Position update start")
 					logger.info(f"[DAY_TRADE] Before: shares={pos.shares:.2f}, avg_price={pos.avg_price:.4f}")
@@ -1249,7 +1188,9 @@ class BacktestEngine:
 					if (pos.shares >= 0 and filled > 0) or (pos.shares <= 0 and filled < 0) or pos.shares == 0:
 						# CRITICAL FIX: Initialize old_shares inside the if block to prevent using stale value
 						old_shares = pos.shares  # save original shares for cost calc
-						new_shares = pos.shares + filled
+						if old_shares == 0:
+							pos.holding_days = 0
+						new_shares = round(pos.shares + filled, 2)
 						logger.info(f"[DAY_TRADE] New shares: {pos.shares:.2f} + {filled:.2f} = {new_shares:.2f}")
 						if new_shares != 0:
 							old_avg_price = pos.avg_price
@@ -1272,9 +1213,13 @@ class BacktestEngine:
 					else:
 						# Handle the case where condition in line 1253 is false
 						logger.info(f"[DAY_TRADE] Reverse trade handling")
-						pos.shares += filled
+						old_shares = pos.shares
+						pos.shares = round(pos.shares + filled, 2)
+						if old_shares > 0:
+							pos.total_cost *= max(0.0, pos.shares / old_shares)
 						logger.info(f"[DAY_TRADE] Update shares: {pos.shares:.2f}")
 						if pos.shares == 0:
+							pos.holding_days = 0
 							pos.avg_price = 0.0
 							pos.total_cost = 0.0
 							logger.info(f"[DAY_TRADE] Position zeroed, reset avg_price and total_cost to 0")
@@ -1292,7 +1237,7 @@ class BacktestEngine:
 					
 					# New: Create detailed trade record
 					trade_record = self._create_trade_record(
-						sym, qty, exec_px, float(ref_px_i), filled, net_cost, pf, open_map, d
+						sym, qty, exec_px, float(ref_px_i), filled, net_cost, pf, open_map, d, previous_position=before_position
 					)
 					trade_records.append(trade_record)
 					
@@ -1304,10 +1249,11 @@ class BacktestEngine:
 						"exec_price": exec_px,  # Execution price (with slippage, used for average position price)
 						"open_price": open_map.get(sym),
 						"mark_price": open_map.get(sym, float(ref_px_i)),
-						"exec_ref_price": float(ref_px_i),  # Opening price (used for cash update)
+						"exec_ref_price": float(ref_px_i),  # Opening reference before slippage
 						"commission_bps": self.commission_bps,
 						"fill_ratio": self.fill_ratio,
-						"trade_value": abs(filled) * float(ref_px_i),  # Trade amount calculated using opening price
+						"trade_value": abs(filled) * exec_px,
+						"commission": self._apply_commission(abs(filled) * exec_px),  # Fee charged on execution notional
 					})
 					
 					# Record successfully executed symbol for delayed decision recording
@@ -1360,27 +1306,8 @@ class BacktestEngine:
 					logger.info(f"[DELAYED_RECORD] No successful trades today, but still need to record hold decisions")
 				strategy.record_executed_decisions(executed_symbols, portfolio=pf)
 			
-			# New: Create daily portfolio snapshot (using next trading day's opening prices to calculate position values)
-			# Snapshot date uses current date, recording the portfolio state after trading for the day
-			# To maintain consistency with the price baseline for next day's LLM decisions, use next trading day's opening prices for calculation
-			from stockbench.core.data_hub import get_next_trading_day, is_trading_day
-			
-			# Find the next trading day
-			next_trading_date = None
-			try:
-				# Find the next trading day from the current date
-				next_trading_date = get_next_trading_day(d)
-				logger.info(f"[NEXT_TRADING_DAY] Next trading day after {d.strftime('%Y-%m-%d')}: {next_trading_date.strftime('%Y-%m-%d')}")
-			except Exception as e:
-				logger.warning(f"[NEXT_TRADING_DAY_ERROR] Failed to find next trading day: {e}")
-			
-			if next_trading_date is not None:
-				# Use next trading day's opening prices
-				next_open_map = self._get_next_day_open_prices(next_trading_date, symbols)
-				portfolio_snapshot = self._create_portfolio_snapshot(pf, d, next_open_map, previous_open_prices=open_map)
-			else:
-				# If next trading day cannot be found, use current day's opening prices
-				portfolio_snapshot = self._create_portfolio_snapshot(pf, d, open_map, previous_open_prices=previous_open_map)
+			# A snapshot at T must not read T+1 prices.
+			portfolio_snapshot = self._create_portfolio_snapshot(pf, d, open_map, previous_open_prices=previous_open_map)
 			portfolio_snapshots.append(portfolio_snapshot)
 
 		# Summary output
@@ -1408,7 +1335,7 @@ class BacktestEngine:
 		per_symbol_bh_nav_df: pd.DataFrame | None = None
 		per_symbol_bh_metrics: Dict[str, pd.DataFrame] | None = None
 		try:
-			bench_cfg = (self.cfg.get("backtest", {}) or {}).get("benchmark")
+			bench_cfg = (self.cfg.get("backtest", {}) or {}).get("benchmark") or {}
 			if bench_cfg and isinstance(bench_cfg, dict):
 				# New type: buy and hold by symbol
 				type_str = str(bench_cfg.get("type", "")).lower()
@@ -1516,4 +1443,4 @@ class BacktestEngine:
 			# New: per-symbol buy and hold benchmark
 			"per_symbol_benchmark_nav": per_symbol_bh_nav_df,
 			"per_symbol_benchmark_metrics": per_symbol_bh_metrics,
-		} 
+		}

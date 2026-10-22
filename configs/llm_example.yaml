@@ -1,0 +1,45 @@
+# Fill in the model name. A compatible model server must already be running.
+symbols_universe: [AAPL, MSFT]
+strategy:
+  name: llm_decision
+runtime:
+  no_network: false
+data:
+  mode: offline_only
+portfolio:
+  total_cash: 100000
+features:
+  history:
+    price_series_days: 7
+news:
+  lookback_days: 3
+  top_k_event_count: 5
+  page_limit: 100
+agents:
+  mode: dual
+  retry:
+    max_attempts: 1
+llm_profiles:
+  local_model:
+    provider: vllm
+    base_url: http://127.0.0.1:8000/v1
+    model: REPLACE_WITH_YOUR_MODEL
+    auth_required: false
+    timeout_sec: 120
+    retry:
+      max_retries: 0
+cache:
+  mode: full
+backtest:
+  warmup_days: 15
+  commission_bps: 1
+  slippage_bps: 2
+  fill_ratio: 1
+  summary_llm: false
+  enable_detailed_logging: true
+  benchmark: null
+risk:
+  max_positions: 20
+logging:
+  console_level: WARNING
+  file_level: WARNING

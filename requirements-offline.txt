@@ -1,0 +1,8 @@
+# Python 3.10+; no model SDK or data-provider client is needed.
+numpy>=1.26,<3
+pandas>=2.2,<3
+pyarrow>=21,<23
+typer>=0.16,<1
+PyYAML>=6,<7
+loguru>=0.7,<1
+matplotlib>=3.8,<4

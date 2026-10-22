@@ -1,0 +1,28 @@
+# This is a small teaching baseline, not a promise of positive returns.
+symbols_universe: [GS, MSFT, HD, V, SHW, CAT, MCD, UNH, AXP, AMGN, TRV, CRM, JPM, IBM, HON, BA, AMZN, AAPL, PG, JNJ]
+strategy:
+  name: equal_weight
+  cash_buffer: 0.01
+runtime:
+  no_network: true
+data:
+  mode: offline_only
+portfolio:
+  total_cash: 100000
+backtest:
+  commission_bps: 1
+  slippage_bps: 2
+  fill_ratio: 1
+  summary_llm: false
+  enable_detailed_logging: true
+  benchmark: null
+  history_days: 30
+risk:
+  max_positions: 20
+agents:
+  retry:
+    max_attempts: 1
+logging:
+  console_level: WARNING
+  file_level: WARNING
+  intercept_std_logging: true

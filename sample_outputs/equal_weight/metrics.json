@@ -1,0 +1,11 @@
+{
+  "cum_return": 0.008450026971935642,
+  "max_drawdown": -0.1494846126579651,
+  "volatility_daily": 0.016928525299157296,
+  "sortino": 0.01980668038827898,
+  "trades_count": 20,
+  "trades_notional": 98995.86616418998,
+  "volatility": 0.26873200802781305,
+  "sharpe": 0.23057084622226176,
+  "sortino_annual": 0.31442130363075854
+}

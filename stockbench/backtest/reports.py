@@ -235,6 +235,15 @@ def write_outputs(result: Dict, run_id: str | None = None, cfg: Dict[str, Any] |
         # Unified Series view (compatible with single-column DataFrame)
         nav_s = _as_series(nav, ("nav",))
         bench_s = _as_series(bench_nav, ("benchmark_nav", "nav"))
+        if nav_s is not None and len(nav_s) > 0:
+            initial_cash = float((cfg or {}).get("portfolio", {}).get("total_cash", 100000))
+            fig, ax = plt.subplots(figsize=(10, 5))
+            ax.plot(nav_s.index, nav_s * initial_cash, color="#8f2b3b")
+            ax.set(xlabel="Date", ylabel="Portfolio value (USD)", title="Simulated portfolio at daily opening prices")
+            ax.grid(alpha=0.2)
+            fig.tight_layout()
+            fig.savefig(os.path.join(base, "equity.png"), dpi=160)
+            plt.close(fig)
         # Equity vs Benchmark + Drawdown
         if nav_s is not None and bench_s is not None and len(nav_s) > 0 and len(bench_s) > 0:
             df_plot = pd.concat([nav_s.rename("strategy"), bench_s.rename("benchmark")], axis=1).dropna()
@@ -797,4 +806,4 @@ def write_outputs(result: Dict, run_id: str | None = None, cfg: Dict[str, Any] |
     except Exception:
         pass
 
-    return base 
+    return base

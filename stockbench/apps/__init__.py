@@ -14,16 +14,14 @@ from __future__ import annotations
 __version__ = "1.0.0"
 __author__ = "Trading Agent Team"
 
-# Import main functions from applications for programmatic access
-try:
-    from .run_backtest import main as run_backtest_main
-    
-    __all__ = [
-        "run_backtest_main",
-    ]
-except ImportError:
-    # Handle cases where dependencies might not be available
-    __all__ = []
+__all__ = ["run_backtest_main"]
+
+
+def __getattr__(name):
+    if name == "run_backtest_main":
+        from .run_backtest import main
+        return main
+    raise AttributeError(name)
 
 # Application metadata
 APPLICATIONS = {
