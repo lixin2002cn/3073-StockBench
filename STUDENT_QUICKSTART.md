@@ -31,8 +31,8 @@ from an `.env` file.
 
 The default configuration is `configs/offline_baseline.yaml`. It starts with
 $100,000, buys equal dollar amounts of the 20 configured stocks on the first
-trading day, keeps about 1% cash for costs, then holds. The dates are March
-through June 2025. There are 83 cached daily observations in this period.
+trading day, keeps about 1% cash for costs, then holds. The default run uses
+March–April 2025, the training/development period, with 42 trading days.
 Commission is 1 basis point and slippage is 2 basis points per trade. One basis
 point is 0.01%. These are teaching settings, not estimates of every real cost.
 
@@ -49,6 +49,56 @@ The terminal prints the output folder. Open these files there:
 
 Outputs are normally under `storage/reports/backtest/<run-id>/`. Reusing a run
 ID creates a new folder with a time suffix. Existing results are preserved.
+
+### Course dates: train, validate, then test
+
+Use the same time split for all methods. The full course period has 83 trading
+days. Weekend and holiday dates do not create trading observations.
+
+| Phase | Calendar range, 2025 | Trading days | Purpose |
+| --- | --- | ---: | --- |
+| Training / Development | 1 March–30 April | 42 | Fit a model, develop a rule, or write a prompt |
+| Validation | 1–31 May | 21 | Compare methods and choose settings |
+| Test | 1–30 June | 20 | Report the final result after choosing your method |
+
+After activating your virtual environment, run:
+
+```sh
+python -m stockbench.apps.run_backtest --split train --run-id train
+python -m stockbench.apps.run_backtest --split validation --run-id validation
+python -m stockbench.apps.run_backtest --split test --run-id test
+```
+
+Without activation, replace `python` with `.\.venv\Scripts\python` on Windows
+or `.venv/bin/python` on macOS/Linux. Add the same `--strategy` and `--cfg`
+options to run your own method in each period. With no date options, the
+runner uses `train`.
+
+`--split` selects dates only. It does not fit, select, or save a model. Each
+command creates a new strategy instance and a fresh account with the configured
+starting cash (default $100,000). Load any trained model or saved learning
+state in your own strategy. Do not carry cash or stock positions across these
+separate runs. Earlier cached observations may supply a past-only feature
+window; check the availability time of each feature and training label.
+
+Choose your method, settings, initial prompt, and online update rule before the test
+period. During June, online learning may use feedback only after it becomes
+available. Do not replay June to select a better method or settings. Keep the
+dates in time order; do not randomly shuffle them. These are public historical
+data, so the test period is not a hidden or contamination-free test set.
+
+Training a new model is optional. Rules, traditional models, LLMs, and agents
+all use these periods. Profit and loss amounts do not affect your grade.
+
+For a shorter development run, use custom dates instead of `--split`:
+
+```sh
+python -m stockbench.apps.run_backtest --start 2025-03-03 --end 2025-03-07 --run-id small-check
+```
+
+Do not combine `--split` with `--start` or `--end`. A missing custom boundary
+uses the training period's boundary. Dates only select the decision period;
+the downloaded archive remains readable and is not a future-data sandbox.
 
 ## 2. Add your own method
 
@@ -161,9 +211,9 @@ definitions, including its Sortino calculation.
 
 This adaptation fixes several execution and output issues in the downloaded
 code. Its results are not an exact reproduction of the paper's leaderboard.
-There is no automatic train/test split. Choose time splits explicitly and
-respect the course's test-data rules. Profit and loss amounts do not determine
-the project grade.
+The CLI follows the course periods above; `--split` selects the decision
+dates. The reader still requires you to respect the information cutoff.
+Profit and loss amounts do not determine the project grade.
 
 ## Checks
 

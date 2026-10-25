@@ -1,5 +1,25 @@
 # Verification of the course starter
 
+## Course time split, 25 October 2026
+
+- 10 tests passed, including CLI date routing, rejection of mixed split/custom
+  date options, and complete, non-overlapping coverage of the course period.
+- The default CLI run now uses training/development (March–April). The named
+  `validation` and `test` periods use May and June respectively.
+- All three CLI runs completed with 20 stocks: 42, 21, and 20 daily observations.
+  Their first/last trading dates were 3 March–30 April, 1–30 May, and 2–30 June.
+  Each baseline run made 20 buy trades from a fresh account.
+- An independent socket/DNS/UDP counter recorded zero network attempts across
+  the three runs. No LLM client was imported and no model request was made.
+- The audit receipt is [sample_outputs/course_split_audit.json](sample_outputs/course_split_audit.json).
+
+The full-period results below and the saved `sample_outputs/equal_weight/`
+example still describe March–June. They are illustrations, not an isolated
+June test result. Model fitting and saved model state remain the strategy's
+responsibility; `--split` selects the decision dates only.
+
+## Original adaptation checks, 22 October 2026
+
 Checked on 22 October 2026 on Windows with Python 3.13.5.
 
 - 8 focused tests passed, covering strategy selection, cash budgets, costs,

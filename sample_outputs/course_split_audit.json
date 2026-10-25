@@ -1,0 +1,30 @@
+{
+  "checked_on": "2026-10-25",
+  "status": "passed",
+  "symbols": 20,
+  "periods": [
+    {
+      "split": "train",
+      "daily_observations": 42,
+      "first": "2025-03-03",
+      "last": "2025-04-30",
+      "trades": 20
+    },
+    {
+      "split": "validation",
+      "daily_observations": 21,
+      "first": "2025-05-01",
+      "last": "2025-05-30",
+      "trades": 20
+    },
+    {
+      "split": "test",
+      "daily_observations": 20,
+      "first": "2025-06-02",
+      "last": "2025-06-30",
+      "trades": 20
+    }
+  ],
+  "network_attempts": 0,
+  "real_model_calls": 0
+}

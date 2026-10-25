@@ -176,3 +176,58 @@ def test_cache_cutoff_missing_data_and_cli_errors():
     assert result.exit_code != 0 and "Unknown strategy" in result.output
     result = CliRunner().invoke(app, ["--cfg", str(ROOT / "configs/offline_baseline.yaml"), "--strategy", "llm_decision"])
     assert result.exit_code != 0 and "allow-network" in result.output
+
+
+def test_course_periods_route_cli_and_reject_ambiguous_dates(tmp_path, monkeypatch):
+    from stockbench.apps import run_backtest as cli
+
+    calls = []
+    def record_run(cfg, strategy, start, end, symbols, **kwargs):
+        calls.append((start, end))
+        return {}
+
+    monkeypatch.setattr(cli, "run_backtest", record_run)
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+    cfg_args = ["--cfg", str(ROOT / "configs/offline_baseline.yaml")]
+    cases = [
+        ([], ("2025-03-01", "2025-04-30")),
+        (["--split", "train"], ("2025-03-01", "2025-04-30")),
+        (["--split", "validation"], ("2025-05-01", "2025-05-31")),
+        (["--split", "test"], ("2025-06-01", "2025-06-30")),
+        (["--end", "2025-03-07"], ("2025-03-01", "2025-03-07")),
+        (["--start", "2025-03-03", "--end", "2025-06-30"],
+         ("2025-03-03", "2025-06-30")),
+    ]
+    for args, expected in cases:
+        result = runner.invoke(app, cfg_args + args)
+        assert result.exit_code == 0, result.output
+        assert calls[-1] == expected
+
+    count = len(calls)
+    for args, message in [
+        (["--split", "typo"], "split must be"),
+        (["--split", "test", "--end", "2025-06-10"], "not both"),
+        (["--start", "2025-05-01"], "start <= end"),
+        (["--end", "not-a-date"], "ISO dates"),
+    ]:
+        result = runner.invoke(app, cfg_args + args)
+        assert result.exit_code != 0 and message in result.output, result.output
+    assert len(calls) == count
+
+
+def test_course_periods_cover_all_released_course_days_once():
+    from stockbench.apps.run_backtest import COURSE_SPLITS
+
+    cfg = config()
+    dates = CachedDatasets(cfg).trading_dates(cfg["symbols_universe"],
+                                             "2025-03-01", "2025-06-30")
+    counts = []
+    covered = []
+    for start, end in COURSE_SPLITS.values():
+        part = dates[(dates >= pd.Timestamp(start)) & (dates <= pd.Timestamp(end))]
+        counts.append(len(part))
+        covered.extend(part)
+    assert counts == [42, 21, 20]
+    assert covered == dates.tolist()
+    assert len(set(covered)) == 83

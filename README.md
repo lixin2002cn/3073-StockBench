@@ -33,13 +33,32 @@ python3 -m venv .venv
 
 Package installation needs internet access. After installation, this baseline
 runs entirely offline. It buys equal dollar amounts of 20 stocks, leaves a
-small cash reserve for costs, and holds them. The default period is March–June
-2025, with 83 cached daily observations and $100,000 of starting cash.
+small cash reserve for costs, and holds them. The default period is March–April
+2025, with 42 trading days and $100,000 of starting cash.
 
 Results go into `storage/reports/backtest/<run-id>/`. Open `equity.png`,
 `metrics.json`, and `trades.csv` to see the account value, summary measures,
 and executed trades. [Sample outputs](sample_outputs/equal_weight/) are
-included.
+included. Those saved examples cover the full March–June period and are
+illustrations, not a separate test result.
+
+## Course time split
+
+| Phase | Dates, 2025 | Trading days | CLI option |
+| --- | --- | ---: | --- |
+| Training / Development | 1 March–30 April | 42 | `--split train` (default) |
+| Validation | 1–31 May | 21 | `--split validation` |
+| Test | 1–30 June | 20 | `--split test` |
+
+Develop your method using March–April and choose settings using May. Report the
+final test result for June. Training a new model is optional. Online learning
+may use feedback that has already arrived, following an update rule chosen
+before testing. Do not replay June to tune your method or randomly shuffle
+the dates.
+
+`--split` selects dates; it does not train a model. Each run starts a fresh
+account. See the [quick start](STUDENT_QUICKSTART.md#course-dates-train-validate-then-test)
+for commands and rules for saved model state and past information.
 
 ## Bring your own method
 
